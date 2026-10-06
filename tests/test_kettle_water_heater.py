@@ -160,6 +160,8 @@ def _entity(cls, kettle: GoveeDevice, state: GoveeDeviceState | None, *args):
     coordinator.last_update_success = True
     coordinator.config_entry.options = {}
     coordinator.account_temperature_unit = MagicMock(return_value=None)
+    pending: dict = {}
+    coordinator.kettle_pending = lambda device_id: pending.setdefault(device_id, {})
     entity = cls(coordinator, kettle, *args)
     entity.hass = MagicMock()
     entity.async_write_ha_state = MagicMock()
@@ -253,41 +255,83 @@ def test_no_state(kettle):
     assert entity.current_operation is None
 
 
+def _sent(entity) -> list:
+    return [c.args[1] for c in entity.coordinator.async_control_device.await_args_list]
+
+
+def _heating(kettle) -> GoveeDeviceState:
+    return _api_state(kettle, 1, 212, 150, 1, modeValue=1)
+
+
+def _off(kettle) -> GoveeDeviceState:
+    return _api_state(kettle, 0, 190, 70, 1, modeValue=1)
+
+
 async def test_turn_on_off(kettle):
-    entity = _entity(GoveeKettleEntity, kettle, None)
+    entity = _entity(GoveeKettleEntity, kettle, _off(kettle))
     await entity.async_turn_on()
     await entity.async_turn_off()
-    sent = [c.args[1] for c in entity.coordinator.async_control_device.await_args_list]
-    assert sent == [PowerCommand(power_on=True), PowerCommand(power_on=False)]
+    assert _sent(entity) == [PowerCommand(power_on=True), PowerCommand(power_on=False)]
 
 
-async def test_set_temperature_is_clamped(kettle):
-    entity = _entity(GoveeKettleEntity, kettle, None)
+async def test_set_temperature_while_heating_is_sent_and_clamped(kettle):
+    entity = _entity(GoveeKettleEntity, kettle, _heating(kettle))
     await entity.async_set_temperature(**{ATTR_TEMPERATURE: 85.4})
     await entity.async_set_temperature(**{ATTR_TEMPERATURE: 120})
     await entity.async_set_temperature(**{ATTR_TEMPERATURE: 10})
     await entity.async_set_temperature()  # no temperature: ignored
-    sent = [c.args[1] for c in entity.coordinator.async_control_device.await_args_list]
-    assert sent == [
+    assert _sent(entity) == [
         KettleTemperatureCommand(temperature=85),
         KettleTemperatureCommand(temperature=100),
         KettleTemperatureCommand(temperature=40),
     ]
 
 
-async def test_set_operation_mode(kettle):
-    entity = _entity(GoveeKettleEntity, kettle, None)
+async def test_set_temperature_while_off_does_not_start_heating(kettle):
+    """On the H7170 a sliderTemperature write starts boiling: hold it while off."""
+    entity = _entity(GoveeKettleEntity, kettle, _off(kettle))
+    await entity.async_set_temperature(**{ATTR_TEMPERATURE: 80})
+    entity.coordinator.async_control_device.assert_not_awaited()
+    assert entity.target_temperature == 80
+    assert entity.current_operation == STATE_OFF
+
+    await entity.async_turn_on()
+    assert _sent(entity) == [KettleTemperatureCommand(temperature=80), PowerCommand(power_on=True)]
+    assert entity.coordinator.kettle_pending(kettle.device_id) == {}
+
+
+async def test_set_operation_mode_while_heating(kettle):
+    entity = _entity(GoveeKettleEntity, kettle, _heating(kettle))
     await entity.async_set_operation_mode("Coffee")
     await entity.async_set_operation_mode("DIY 2")
     await entity.async_set_operation_mode(STATE_OFF)
-    sent = [c.args[1] for c in entity.coordinator.async_control_device.await_args_list]
-    assert sent == [
+    assert _sent(entity) == [
         WorkModeCommand(work_mode=4, mode_value=0),
         WorkModeCommand(work_mode=1, mode_value=2),
         PowerCommand(power_on=False),
     ]
     with pytest.raises(ServiceValidationError):
         await entity.async_set_operation_mode("Espresso")
+
+
+async def test_set_operation_mode_while_off_is_held(kettle):
+    entity = _entity(GoveeKettleEntity, kettle, _off(kettle))
+    await entity.async_set_temperature(**{ATTR_TEMPERATURE: 75})
+    await entity.async_set_operation_mode("Green Tea")  # preset replaces the DIY target
+    entity.coordinator.async_control_device.assert_not_awaited()
+
+    await entity.async_turn_on()
+    assert _sent(entity) == [WorkModeCommand(work_mode=2, mode_value=0), PowerCommand(power_on=True)]
+
+
+def test_pending_cleared_when_kettle_turns_on_elsewhere(kettle):
+    state = _off(kettle)
+    entity = _entity(GoveeKettleEntity, kettle, state)
+    entity.coordinator.kettle_pending(kettle.device_id)["target"] = 70
+    state.power_state = True
+    entity._handle_coordinator_update()
+    assert entity.coordinator.kettle_pending(kettle.device_id) == {}
+    assert entity.target_temperature == 88
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +353,7 @@ async def test_select_platform_creates_kettle_mode(kettle):
     assert kettle_selects[0].unique_id.endswith("_kettle_mode")
 
 
-async def test_select_option_sends_work_mode(kettle):
+async def test_select_option_while_heating_sends_work_mode(kettle):
     entity = _entity(
         GoveeKettleModeSelectEntity,
         kettle,
@@ -321,3 +365,13 @@ async def test_select_option_sends_work_mode(kettle):
     entity.coordinator.async_control_device.assert_awaited_once_with(
         kettle.device_id, WorkModeCommand(work_mode=5, mode_value=0)
     )
+
+
+async def test_select_option_while_off_is_held(kettle):
+    entity = _entity(GoveeKettleModeSelectEntity, kettle, _off(kettle), kettle.get_kettle_mode_options())
+    await entity.async_select_option("Coffee")
+    entity.coordinator.async_control_device.assert_not_awaited()
+    assert entity.current_option == "Coffee"
+    assert entity.coordinator.kettle_pending(kettle.device_id) == {"mode": (4, 0)}
+    with pytest.raises(ServiceValidationError):
+        await entity.async_select_option("Espresso")

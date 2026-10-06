@@ -424,6 +424,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # Requests/day this install is willing to spend on polling. The poll
         # interval is paced against the client's running daily counter to land
         # on it — see _apply_budget_pacing and request_budget.py.
+        # Target temperature / brewing mode picked while a smart kettle is off.
+        # On the H7170 those writes start heating, so they are held here and
+        # sent when the kettle is turned on (see water_heater.py).
+        self._kettle_pending: dict[str, dict[str, Any]] = {}
         self._daily_request_budget: int = int(
             config_entry.options.get(CONF_DAILY_REQUEST_BUDGET, DEFAULT_DAILY_REQUEST_BUDGET)
         )
@@ -991,6 +995,13 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         so entity availability must not gate on it (issue #97).
         """
         return device_id in self._bff_thermometer_ids
+
+    def kettle_pending(self, device_id: str) -> dict[str, Any]:
+        """Settings chosen while a kettle is off, applied when it is turned on.
+
+        Keys: ``target`` (°C) and ``mode`` (``(work_mode, mode_value)``).
+        """
+        return self._kettle_pending.setdefault(device_id, {})
 
     def account_temperature_unit(self, device_id: str) -> str | None:
         """Return the account's display unit for a device, if Govee told us.

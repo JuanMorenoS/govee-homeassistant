@@ -8,6 +8,11 @@ operation modes.
 A water_heater is also what HomeKit Bridge turns into a thermostat with
 Heat/Off and a target temperature, so the kettle becomes fully controllable
 from Apple Home and Siri.
+
+On the H7170 writing ``sliderTemperature`` (and possibly ``workMode``) starts
+heating. So while the kettle is off a new target or mode is only remembered
+(coordinator.kettle_pending) and shown, and it is sent when the kettle is
+turned on. A kettle must never start boiling because someone moved a slider.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from typing import Any
 
 from homeassistant.components.water_heater import WaterHeaterEntity, WaterHeaterEntityFeature
 from homeassistant.const import ATTR_TEMPERATURE, STATE_OFF, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -110,8 +115,11 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        """Return the target temperature in Celsius."""
+        """Return the target temperature in Celsius (a pending one while off)."""
         state = self.device_state
+        pending = self._pending.get("target")
+        if pending is not None and not (state and state.power_state):
+            return float(pending)
         if state is None or state.kettle_target_temperature is None:
             return None
         return float(state.kettle_target_temperature)
@@ -144,12 +152,34 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
                 return name
         return candidates[0] if candidates else None
 
+    @property
+    def _pending(self) -> dict[str, Any]:
+        return self.coordinator.kettle_pending(self._device_id)
+
+    @property
+    def _is_heating(self) -> bool:
+        state = self.device_state
+        return bool(state and state.power_state)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Drop settings held for an off kettle once it is on by other means."""
+        if self._is_heating:
+            self._pending.clear()
+        super()._handle_coordinator_update()
+
     # --------------------------------------------------------------------- #
     # Commands
     # --------------------------------------------------------------------- #
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Start heating."""
+        """Start heating, applying any target or mode chosen while off."""
+        mode = self._pending.pop("mode", None)
+        target = self._pending.pop("target", None)
+        if mode is not None:
+            await self._async_send_command(WorkModeCommand(work_mode=mode[0], mode_value=mode[1]))
+        if target is not None:
+            await self._async_send_command(KettleTemperatureCommand(temperature=int(target)))
         await self._async_send_command(PowerCommand(power_on=True))
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -157,15 +187,26 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
         await self._async_send_command(PowerCommand(power_on=False))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set the target temperature (Celsius, clamped to the kettle's range)."""
+        """Set the target temperature (Celsius, clamped to the kettle's range).
+
+        Sent right away only while heating; while off it is held until turn_on.
+        """
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
-        clamped = max(self._attr_min_temp, min(self._attr_max_temp, float(temperature)))
-        await self._async_send_command(KettleTemperatureCommand(temperature=round(clamped)))
+        target = round(max(self._attr_min_temp, min(self._attr_max_temp, float(temperature))))
+        if self._is_heating:
+            await self._async_send_command(KettleTemperatureCommand(temperature=target))
+            return
+        self._pending["target"] = target
+        self.async_write_ha_state()
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:
-        """Switch brewing mode; "off" turns the kettle off."""
+        """Switch brewing mode; "off" turns the kettle off.
+
+        A brewing mode picked while off is held until turn_on (and replaces a
+        held DIY target, since the preset brings its own temperature).
+        """
         if operation_mode == STATE_OFF:
             await self.async_turn_off()
             return
@@ -177,4 +218,9 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
                 translation_placeholders={"device": self._device.name, "mode": operation_mode},
             )
         work_mode, mode_value = mode
-        await self._async_send_command(WorkModeCommand(work_mode=work_mode, mode_value=mode_value))
+        if self._is_heating:
+            await self._async_send_command(WorkModeCommand(work_mode=work_mode, mode_value=mode_value))
+            return
+        self._pending["mode"] = (work_mode, mode_value)
+        self._pending.pop("target", None)
+        self.async_write_ha_state()
