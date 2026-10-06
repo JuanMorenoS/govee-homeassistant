@@ -4040,8 +4040,13 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         window *= LOCAL_READING_FRESHNESS_FACTOR
         now = dt_util.utcnow()
         fresh: set[str] = set()
-        for device_id in pollable:
+        for device_id, device in pollable.items():
             if device_id not in self._states:
+                continue
+            # A kettle's push (onOff + setTem) never carries the water
+            # temperature, so a "fresh" push must not stand in for the cloud
+            # read that does — the live temperature would stay unknown.
+            if device.is_kettle:
                 continue
             latest = self._local_last_updated(device_id)
             age = None if latest is None else (now - latest).total_seconds()
