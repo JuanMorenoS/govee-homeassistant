@@ -23,6 +23,7 @@ from .const import (
     SUFFIX_DIY_SCENE_SELECT,
     SUFFIX_HDMI_SOURCE_SELECT,
     SUFFIX_HEATER_FAN_SPEED,
+    SUFFIX_KETTLE_MODE,
     SUFFIX_MUSIC_MODE_SELECT,
     SUFFIX_NIGHTLIGHT_SCENE_SELECT,
     SUFFIX_PRESET_SCENE_SELECT,
@@ -181,6 +182,21 @@ async def async_setup_entry(
                     device.name,
                     len(music_options),
                 )
+
+        # Kettle brewing mode selector (H7170: DIY 1-4, Green Tea, Oolong,
+        # Coffee, Black Tea/Boil). HomeKit Bridge exposes a select as one
+        # switch per option, so each mode is a tap in Apple Home.
+        if device.is_kettle:
+            kettle_modes = device.get_kettle_mode_options()
+            if kettle_modes:
+                entities.append(
+                    GoveeKettleModeSelectEntity(
+                        coordinator=coordinator,
+                        device=device,
+                        options=kettle_modes,
+                    )
+                )
+                _LOGGER.debug("Created kettle mode select entity for %s", device.name)
 
         # Heater fan speed selector
         if device.is_heater:
@@ -800,6 +816,26 @@ class GoveeFanSpeedSelectEntity(_GoveeSelectBase):
             mode_value,
             self._device.name,
         )
+
+
+class GoveeKettleModeSelectEntity(GoveeFanSpeedSelectEntity):
+    """Govee smart kettle brewing mode select entity (e.g. H7170).
+
+    Same workMode/modeValue mapping as the heater fan speed select, with the
+    kettle's modes as options.
+    """
+
+    _attr_translation_key = "govee_kettle_mode_select"
+
+    def __init__(
+        self,
+        coordinator: GoveeCoordinator,
+        device: GoveeDevice,
+        options: list[dict[str, Any]],
+    ) -> None:
+        """Initialize the kettle mode select entity."""
+        super().__init__(coordinator, device, options)
+        self._attr_unique_id = f"{device.device_id}{SUFFIX_KETTLE_MODE}"
 
 
 class GoveePurifierModeSelectEntity(_GoveeSelectBase):

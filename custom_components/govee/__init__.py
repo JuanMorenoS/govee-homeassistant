@@ -82,6 +82,7 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.EVENT,  # Leak sensor button presses
     Platform.BUTTON,
+    Platform.WATER_HEATER,  # Smart kettles
 ]
 
 

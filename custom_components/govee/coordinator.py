@@ -151,6 +151,7 @@ from .models.commands import (
     RangeCommand,
     SceneCommand,
     SegmentColorCommand,
+    KettleTemperatureCommand,
     TemperatureSettingCommand,
     ToggleCommand,
     WorkModeCommand,
@@ -5582,6 +5583,8 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         elif isinstance(command, TemperatureSettingCommand):
             state.heater_temperature = command.temperature
             state.heater_auto_stop = command.auto_stop
+        elif isinstance(command, KettleTemperatureCommand):
+            state.kettle_target_temperature = command.temperature
         elif isinstance(command, WorkModeCommand):
             state.apply_optimistic_work_mode(command.work_mode, command.mode_value)
         elif isinstance(command, OscillationCommand):

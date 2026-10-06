@@ -164,6 +164,9 @@ INSTANCE_MUSIC_MODE = "musicMode"
 INSTANCE_DREAMVIEW = "dreamViewToggle"
 INSTANCE_MOVIE_MODE = "movieMode"
 INSTANCE_TARGET_TEMPERATURE = "targetTemperature"
+# Smart kettles (H7170) carry their target temperature in a
+# ``temperature_setting`` STRUCT named ``sliderTemperature`` instead.
+INSTANCE_SLIDER_TEMPERATURE = "sliderTemperature"
 # Ceiling-fan-with-light combo instances (e.g. H1310, reported as
 # devices.types.light with an integrated fan). Distinct from the standalone
 # fan shape (workMode / fanSpeed / oscillationToggle) — issue #74.
@@ -1001,6 +1004,65 @@ class GoveeDevice:
                             int(range_data.get("max", 35)),
                         )
         return (16, 35)
+
+    @property
+    def supports_kettle_temperature(self) -> bool:
+        """Check if device is a kettle with a settable target temperature (H7170)."""
+        return self.is_kettle and any(
+            cap.type == CAPABILITY_TEMPERATURE_SETTING and cap.instance == INSTANCE_SLIDER_TEMPERATURE
+            for cap in self.capabilities
+        )
+
+    def get_kettle_temperature_range(self) -> tuple[int, int]:
+        """Return the kettle's target temperature range in Celsius.
+
+        The ``sliderTemperature`` STRUCT nests the range under its
+        ``temperature`` field (H7170: 40-100). Defaults to that range.
+        """
+        for cap in self.capabilities:
+            if cap.type == CAPABILITY_TEMPERATURE_SETTING and cap.instance == INSTANCE_SLIDER_TEMPERATURE:
+                for f in cap.parameters.get("fields", []):
+                    if f.get("fieldName") == "temperature":
+                        range_data = f.get("range", {})
+                        return (int(range_data.get("min", 40)), int(range_data.get("max", 100)))
+        return (40, 100)
+
+    def get_kettle_mode_options(self) -> list[dict[str, Any]]:
+        """Return kettle brewing modes as {"name", "work_mode", "mode_value"} dicts.
+
+        The H7170 ``workMode`` STRUCT lists DIY / Green Tea / Oolong Tea /
+        Coffee / Black Tea/Boil. DIY carries the user's saved presets as
+        ``modeValue`` sub-options (1-4), so each becomes its own entry
+        ("DIY 1".."DIY 4"); the fixed modes use their ``defaultValue`` (0).
+        """
+        if not self.is_kettle:
+            return []
+        work_modes: list[dict[str, Any]] = []
+        mode_values: dict[str, dict[str, Any]] = {}
+        for cap in self.capabilities:
+            if not cap.is_work_mode:
+                continue
+            for fld in cap.parameters.get("fields", []):
+                if fld.get("fieldName") == "workMode":
+                    work_modes = fld.get("options", [])
+                elif fld.get("fieldName") == "modeValue":
+                    mode_values = {str(opt.get("name")): opt for opt in fld.get("options", [])}
+
+        result: list[dict[str, Any]] = []
+        for opt in work_modes:
+            name = str(opt.get("name", "")).strip()
+            value = opt.get("value")
+            if not name or value is None:
+                continue
+            sub = mode_values.get(name, {})
+            presets = [o.get("value") for o in sub.get("options", []) if o.get("value") is not None]
+            if presets:
+                for preset in presets:
+                    result.append({"name": f"{name} {preset}", "work_mode": int(value), "mode_value": int(preset)})
+            else:
+                default = sub.get("defaultValue", 0)
+                result.append({"name": name, "work_mode": int(value), "mode_value": int(default or 0)})
+        return result
 
     def get_fan_speed_options(self) -> list[dict[str, Any]]:
         """Extract fan speed options from work_mode capability.

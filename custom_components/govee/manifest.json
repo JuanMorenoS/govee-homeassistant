@@ -1,26 +1,47 @@
 {
   "domain": "govee",
   "name": "Govee Cloud Integration",
-  "after_dependencies": ["bluetooth"],
-  "bluetooth": [
-    {"local_name": "Govee_*", "connectable": true},
-    {"local_name": "ihoment_*", "connectable": true},
-    {"local_name": "GBK_*", "connectable": true},
-    {"manufacturer_id": 34819, "connectable": true}
+  "after_dependencies": [
+    "bluetooth"
   ],
-  "codeowners": ["@lasswellt"],
+  "bluetooth": [
+    {
+      "local_name": "Govee_*",
+      "connectable": true
+    },
+    {
+      "local_name": "ihoment_*",
+      "connectable": true
+    },
+    {
+      "local_name": "GBK_*",
+      "connectable": true
+    },
+    {
+      "manufacturer_id": 34819,
+      "connectable": true
+    }
+  ],
+  "codeowners": [
+    "@lasswellt"
+  ],
   "config_flow": true,
-  "dependencies": ["bluetooth_adapters", "network"],
+  "dependencies": [
+    "bluetooth_adapters",
+    "network"
+  ],
   "documentation": "https://github.com/lasswellt/govee-homeassistant/blob/main/README.md",
   "integration_type": "hub",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/lasswellt/govee-homeassistant/issues",
-  "loggers": ["aiomqtt"],
+  "loggers": [
+    "aiomqtt"
+  ],
   "quality_scale": "platinum",
   "requirements": [
     "aiohttp-retry>=2.8.3",
     "aiomqtt>=2.0.0",
     "bleak-retry-connector>=3.4.0"
   ],
-  "version": "2026.10.0"
+  "version": "2026.10.0.1"
 }

@@ -243,6 +243,7 @@ class GoveeDeviceState:
 
     # Heater state
     heater_temperature: int | None = None  # Target temperature in Celsius
+    kettle_target_temperature: int | None = None  # Kettle sliderTemperature target, Celsius
     heater_auto_stop: int | None = None  # Auto-stop setting (0=Maintain, 1=Auto-stop)
     fan_speed: int | None = None  # Fan speed mode value (1=Low, 2=Medium, 3=High)
     # Unit reported by the temperature_setting STRUCT state ("Celsius" /
@@ -536,6 +537,23 @@ class GoveeDeviceState:
                 # Capturing autoStop here lets temperature-change commands
                 # preserve the user's choice instead of resetting it to 0
                 # (issue #29).
+                # Kettles (H7170) report their setpoint as
+                # ``{"unit": "Fahrenheit", "targetTemperature": 190}`` under
+                # ``sliderTemperature``; keep it canonical °C like heaters.
+                if instance == "sliderTemperature" and isinstance(value, dict):
+                    temp_val = value.get("targetTemperature")
+                    if temp_val is None:
+                        temp_val = value.get("temperature")
+                    if temp_val is not None:
+                        try:
+                            kettle_temp = float(temp_val)
+                        except (TypeError, ValueError):
+                            pass
+                        else:
+                            if isinstance(unit, str) and unit.lower() == "fahrenheit":
+                                kettle_temp = (kettle_temp - 32) * 5 / 9
+                            self.kettle_target_temperature = round(kettle_temp)
+
                 if instance == "targetTemperature" and isinstance(value, dict):
                     # The capability definition names the field ``temperature``
                     # (and commands are sent that way), but the polled STATE
