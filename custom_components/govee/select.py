@@ -41,6 +41,7 @@ from .models import (
     SnapshotCommand,
     WorkModeCommand,
 )
+from .water_heater import kettle_mode_commands
 from .models.device import (
     INSTANCE_HDMI_SOURCE,
     INSTANCE_NIGHTLIGHT_SCENE,
@@ -837,34 +838,20 @@ class GoveeKettleModeSelectEntity(GoveeFanSpeedSelectEntity):
         super().__init__(coordinator, device, options)
         self._attr_unique_id = f"{device.device_id}{SUFFIX_KETTLE_MODE}"
 
-    @property
-    def current_option(self) -> str | None:
-        """Return the mode, or the one held for an off kettle."""
-        state = self.coordinator.get_state(self._device_id)
-        pending = self.coordinator.kettle_pending(self._device_id).get("mode")
-        if pending is not None and not (state and state.power_state):
-            for name, values in self._option_map.items():
-                if values == tuple(pending):
-                    return name
-        return super().current_option
-
     async def async_select_option(self, option: str) -> None:
-        """Change mode now while heating; while off hold it until turn-on.
+        """Brew in the chosen mode, starting the kettle if it is off.
 
-        On the H7170 a mode write can start heating, so an off kettle only
-        remembers the choice (shared with the water_heater entity).
+        In Apple Home each option is a switch, so picking "Green Tea" is an
+        explicit "brew green tea now".
         """
         values = self._option_map.get(option)
         if values is None:
             raise self._unknown_option(option)
         state = self.coordinator.get_state(self._device_id)
-        if state and state.power_state:
-            await super().async_select_option(option)
-            return
-        pending = self.coordinator.kettle_pending(self._device_id)
-        pending["mode"] = values
-        pending.pop("target", None)
-        self.coordinator.async_update_listeners()
+        self.coordinator.kettle_pending(self._device_id).pop("target", None)
+        for command in kettle_mode_commands(*values, heating=bool(state and state.power_state)):
+            await self._async_send_command(command)
+        self.async_write_ha_state()
 
 
 class GoveePurifierModeSelectEntity(_GoveeSelectBase):

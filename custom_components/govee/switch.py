@@ -41,6 +41,7 @@ from .models import (
     ToggleCommand,
     create_night_light_command,
 )
+from .water_heater import kettle_turn_on_commands
 from .models.device import (
     INSTANCE_BACKGROUND_LIGHT_TOGGLE,
     INSTANCE_MAIN_LIGHT_TOGGLE,
@@ -887,7 +888,11 @@ class GoveeAppliancePowerSwitchEntity(GoveeEntity, SwitchEntity):
         return state.power_state if state else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the appliance on."""
+        """Turn the appliance on (a kettle also applies a target held while off)."""
+        if self._device.is_kettle:
+            for command in kettle_turn_on_commands(self.coordinator, self._device_id):
+                await self._async_send_command(command)
+            return
         await self._async_send_command(PowerCommand(power_on=True))
 
     async def async_turn_off(self, **kwargs: Any) -> None:
