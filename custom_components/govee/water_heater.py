@@ -1,9 +1,10 @@
 """Water heater platform for Govee integration.
 
 Exposes Govee smart kettles (e.g. H7170) as HA water_heater entities:
-power on/off, target temperature (``sliderTemperature``), the live water
-temperature (``sensorTemperature``) and the brewing modes (``workMode``) as
-operation modes.
+power on/off, target temperature (``sliderTemperature``) and the live water
+temperature (``sensorTemperature``). Brewing modes (``workMode``) are not
+exposed: they start the kettle, and HomeKit turns mode selectors into
+switches whose OFF still selects the mode, so Siri could start boiling.
 
 A water_heater is also what HomeKit Bridge turns into a thermostat with
 Heat/Off and a target temperature, so the kettle becomes fully controllable
@@ -13,9 +14,7 @@ On the H7170 writing ``sliderTemperature`` starts heating. So while the
 kettle is off a new target is only remembered (coordinator.kettle_pending)
 and shown, and it is sent when the kettle is turned on, from this entity or
 the power switch. A kettle must never start boiling because someone moved a
-slider. Picking a brewing mode, on the other hand, is an explicit "brew
-this": it starts the kettle in that mode (in Apple Home each mode of the
-mode select is a switch).
+slider.
 """
 
 from __future__ import annotations
@@ -24,20 +23,18 @@ import logging
 from typing import Any
 
 from homeassistant.components.water_heater import WaterHeaterEntity, WaterHeaterEntityFeature
-from homeassistant.const import ATTR_TEMPERATURE, STATE_OFF, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, STATE_OFF, STATE_ON, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     CONF_API_TEMPERATURE_UNIT,
     DEFAULT_API_TEMPERATURE_UNIT,
-    DOMAIN,
     resolve_fahrenheit_conversion,
 )
 from .coordinator import GoveeConfigEntry, GoveeCoordinator
 from .entity import GoveeEntity
-from .models import DeviceCommand, GoveeDevice, KettleTemperatureCommand, PowerCommand, WorkModeCommand
+from .models import DeviceCommand, GoveeDevice, KettleTemperatureCommand, PowerCommand
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,14 +51,6 @@ def kettle_turn_on_commands(coordinator: GoveeCoordinator, device_id: str) -> li
     if target is not None:
         commands.append(KettleTemperatureCommand(temperature=int(target)))
     commands.append(PowerCommand(power_on=True))
-    return commands
-
-
-def kettle_mode_commands(work_mode: int, mode_value: int, *, heating: bool) -> list[DeviceCommand]:
-    """Commands that switch a kettle to a brewing mode, starting it if off."""
-    commands: list[DeviceCommand] = [WorkModeCommand(work_mode=work_mode, mode_value=mode_value)]
-    if not heating:
-        commands.append(PowerCommand(power_on=True))
     return commands
 
 
@@ -97,16 +86,7 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
         self._attr_min_temp = float(min_t)
         self._attr_max_temp = float(max_t)
 
-        # Brewing modes, keyed by their display name ("Green Tea", "DIY 1"...).
-        self._modes: dict[str, tuple[int, int]] = {
-            opt["name"]: (opt["work_mode"], opt["mode_value"]) for opt in device.get_kettle_mode_options()
-        }
-
-        features = WaterHeaterEntityFeature.TARGET_TEMPERATURE | WaterHeaterEntityFeature.ON_OFF
-        if self._modes:
-            features |= WaterHeaterEntityFeature.OPERATION_MODE
-            self._attr_operation_list = [STATE_OFF, *self._modes]
-        self._attr_supported_features = features
+        self._attr_supported_features = WaterHeaterEntityFeature.TARGET_TEMPERATURE | WaterHeaterEntityFeature.ON_OFF
 
     # --------------------------------------------------------------------- #
     # State
@@ -150,31 +130,17 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
 
     @property
     def current_operation(self) -> str | None:
-        """Return "off" while the kettle is off, otherwise its brewing mode."""
+        """Return "on" while heating and "off" otherwise."""
         state = self.device_state
         if state is None:
             return None
-        if not state.power_state:
-            return STATE_OFF
-        mode = self._mode_name(state.work_mode, state.mode_value)
-        # A powered kettle in a mode we can't name is still heating; report the
-        # first mode rather than "off" so HomeKit shows it as heating.
-        return mode or (next(iter(self._modes), None) if self._modes else None)
+        return STATE_ON if state.power_state else STATE_OFF
 
     @property
     def is_on(self) -> bool | None:
         """Return True while the kettle is heating."""
         state = self.device_state
         return state.power_state if state else None
-
-    def _mode_name(self, work_mode: int | None, mode_value: int | None) -> str | None:
-        if work_mode is None:
-            return None
-        candidates = [name for name, (wm, _mv) in self._modes.items() if wm == work_mode]
-        for name in candidates:
-            if self._modes[name][1] == mode_value:
-                return name
-        return candidates[0] if candidates else None
 
     @property
     def _pending(self) -> dict[str, Any]:
@@ -219,20 +185,3 @@ class GoveeKettleEntity(GoveeEntity, WaterHeaterEntity):
             return
         self._pending["target"] = target
         self.async_write_ha_state()
-
-    async def async_set_operation_mode(self, operation_mode: str) -> None:
-        """Brew in a mode (starting the kettle if off); "off" turns it off."""
-        if operation_mode == STATE_OFF:
-            await self.async_turn_off()
-            return
-        mode = self._modes.get(operation_mode)
-        if mode is None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="unsupported_mode",
-                translation_placeholders={"device": self._device.name, "mode": operation_mode},
-            )
-        # The preset brings its own temperature; drop a DIY target held while off.
-        self._pending.pop("target", None)
-        for command in kettle_mode_commands(*mode, heating=self._is_heating):
-            await self._async_send_command(command)

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.components.water_heater import WaterHeaterEntityFeature
 from homeassistant.const import ATTR_TEMPERATURE, STATE_OFF
-from homeassistant.exceptions import ServiceValidationError
 import pytest
 
 from custom_components.govee import select as select_mod
@@ -17,7 +16,6 @@ from custom_components.govee.models import (
     GoveeDeviceState,
     KettleTemperatureCommand,
     PowerCommand,
-    WorkModeCommand,
 )
 from custom_components.govee.models.device import (
     CAPABILITY_ON_OFF,
@@ -28,7 +26,6 @@ from custom_components.govee.models.device import (
     INSTANCE_SLIDER_TEMPERATURE,
     INSTANCE_WORK_MODE,
 )
-from custom_components.govee.select import GoveeKettleModeSelectEntity
 from custom_components.govee.switch import GoveeAppliancePowerSwitchEntity
 from custom_components.govee.water_heater import GoveeKettleEntity
 
@@ -232,21 +229,11 @@ def test_entity_attributes(kettle):
     assert entity.max_temp == 100
     assert entity.supported_features & WaterHeaterEntityFeature.ON_OFF
     assert entity.supported_features & WaterHeaterEntityFeature.TARGET_TEMPERATURE
-    assert entity.supported_features & WaterHeaterEntityFeature.OPERATION_MODE
-    assert entity.operation_list == [STATE_OFF, *EXPECTED_MODES]
+    assert not entity.supported_features & WaterHeaterEntityFeature.OPERATION_MODE
     assert entity.target_temperature == 88
     assert entity.current_temperature == pytest.approx(21.1)
     assert entity.current_operation == STATE_OFF
     assert entity.is_on is False
-
-
-def test_current_operation_when_heating(kettle):
-    entity = _entity(GoveeKettleEntity, kettle, _api_state(kettle, 1, 212, 150, 2, modeValue=0))
-    assert entity.current_operation == "Green Tea"
-    assert entity.is_on is True
-
-    entity = _entity(GoveeKettleEntity, kettle, _api_state(kettle, 1, 212, 150, 1, modeValue=3))
-    assert entity.current_operation == "DIY 3"
 
 
 def test_no_state(kettle):
@@ -301,30 +288,6 @@ async def test_set_temperature_while_off_does_not_start_heating(kettle):
     assert entity.coordinator.kettle_pending(kettle.device_id) == {}
 
 
-async def test_set_operation_mode_while_heating(kettle):
-    entity = _entity(GoveeKettleEntity, kettle, _heating(kettle))
-    await entity.async_set_operation_mode("Coffee")
-    await entity.async_set_operation_mode("DIY 2")
-    await entity.async_set_operation_mode(STATE_OFF)
-    assert _sent(entity) == [
-        WorkModeCommand(work_mode=4, mode_value=0),
-        WorkModeCommand(work_mode=1, mode_value=2),
-        PowerCommand(power_on=False),
-    ]
-    with pytest.raises(ServiceValidationError):
-        await entity.async_set_operation_mode("Espresso")
-
-
-async def test_set_operation_mode_while_off_starts_brewing(kettle):
-    """Picking a brewing mode is an explicit "brew this": it starts the kettle."""
-    entity = _entity(GoveeKettleEntity, kettle, _off(kettle))
-    await entity.async_set_temperature(**{ATTR_TEMPERATURE: 75})
-    entity.coordinator.async_control_device.assert_not_awaited()
-    await entity.async_set_operation_mode("Green Tea")  # preset replaces the held DIY target
-    assert _sent(entity) == [WorkModeCommand(work_mode=2, mode_value=0), PowerCommand(power_on=True)]
-    assert entity.coordinator.kettle_pending(kettle.device_id) == {}
-
-
 def test_pending_cleared_when_kettle_turns_on_elsewhere(kettle):
     state = _off(kettle)
     entity = _entity(GoveeKettleEntity, kettle, state)
@@ -340,44 +303,6 @@ def test_pending_cleared_when_kettle_turns_on_elsewhere(kettle):
 # --------------------------------------------------------------------------- #
 
 
-async def test_select_platform_creates_kettle_mode(kettle):
-    coordinator = MagicMock()
-    coordinator.devices = {kettle.device_id: kettle}
-    entry = MagicMock()
-    entry.runtime_data = coordinator
-    entry.options = {}
-    added: list = []
-    await select_mod.async_setup_entry(MagicMock(), entry, added.extend)
-    kettle_selects = [e for e in added if isinstance(e, GoveeKettleModeSelectEntity)]
-    assert len(kettle_selects) == 1
-    assert kettle_selects[0].options == EXPECTED_MODES
-    assert kettle_selects[0].unique_id.endswith("_kettle_mode")
-
-
-async def test_select_option_while_heating_sends_work_mode(kettle):
-    entity = _entity(
-        GoveeKettleModeSelectEntity,
-        kettle,
-        _api_state(kettle, 1, 212, 150, 3, modeValue=0),
-        kettle.get_kettle_mode_options(),
-    )
-    assert entity.current_option == "Oolong Tea"
-    await entity.async_select_option("Black Tea/Boil")
-    entity.coordinator.async_control_device.assert_awaited_once_with(
-        kettle.device_id, WorkModeCommand(work_mode=5, mode_value=0)
-    )
-
-
-async def test_select_option_while_off_starts_brewing(kettle):
-    entity = _entity(GoveeKettleModeSelectEntity, kettle, _off(kettle), kettle.get_kettle_mode_options())
-    entity.coordinator.kettle_pending(kettle.device_id)["target"] = 70
-    await entity.async_select_option("Coffee")
-    assert _sent(entity) == [WorkModeCommand(work_mode=4, mode_value=0), PowerCommand(power_on=True)]
-    assert entity.coordinator.kettle_pending(kettle.device_id) == {}
-    with pytest.raises(ServiceValidationError):
-        await entity.async_select_option("Espresso")
-
-
 async def test_power_switch_applies_held_target(kettle):
     entity = _entity(GoveeAppliancePowerSwitchEntity, kettle, _off(kettle))
     entity.coordinator.kettle_pending(kettle.device_id)["target"] = 80
@@ -387,3 +312,21 @@ async def test_power_switch_applies_held_target(kettle):
     entity.coordinator.async_control_device.reset_mock()
     await entity.async_turn_on()  # nothing held: plain power on
     assert _sent(entity) == [PowerCommand(power_on=True)]
+
+
+def test_heating_state_is_on(kettle):
+    entity = _entity(GoveeKettleEntity, kettle, _api_state(kettle, 1, 212, 150, 2, modeValue=0))
+    assert entity.current_operation == "on"
+    assert entity.is_on is True
+
+
+async def test_no_kettle_mode_select(kettle):
+    """Brewing modes start the kettle; HomeKit would expose them as switches."""
+    coordinator = MagicMock()
+    coordinator.devices = {kettle.device_id: kettle}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    entry.options = {}
+    added: list = []
+    await select_mod.async_setup_entry(MagicMock(), entry, added.extend)
+    assert not any(e.unique_id.endswith("_kettle_mode") for e in added)

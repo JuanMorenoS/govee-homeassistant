@@ -222,9 +222,6 @@
       },
       "govee_nightlight_scene_select": {
         "name": "Night light scene"
-      },
-      "govee_kettle_mode_select": {
-        "name": "Mode"
       }
     },
     "switch": {
