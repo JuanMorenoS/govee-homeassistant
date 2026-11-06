@@ -176,11 +176,15 @@ def test_capability_helpers(kettle):
     assert kettle.get_kettle_temperature_range() == (40, 100)
     modes = kettle.get_kettle_mode_options()
     assert [m["name"] for m in modes] == EXPECTED_MODES
-    assert modes[1] == {"name": "DIY 2", "work_mode": 1, "mode_value": 2}
-    assert modes[-1] == {"name": "Black Tea/Boil", "work_mode": 5, "mode_value": 0}
+    assert {k: modes[1][k] for k in ("name", "work_mode", "mode_value")} == {"name": "DIY 2", "work_mode": 1, "mode_value": 2}
+    assert {k: modes[-1][k] for k in ("name", "work_mode", "mode_value")} == {
+        "name": "Black Tea/Boil",
+        "work_mode": 5,
+        "mode_value": 0,
+    }
 
 
-def test_non_kettle_has_no_kettle_helpers(kettle):
+async def test_non_kettle_gets_no_water_heater(kettle):
     heater = GoveeDevice(
         device_id="x",
         sku="H713B",
@@ -189,8 +193,14 @@ def test_non_kettle_has_no_kettle_helpers(kettle):
         capabilities=(POWER, SLIDER_TEMPERATURE, WORK_MODE),
         is_group=False,
     )
-    assert heater.supports_kettle_temperature is False
-    assert heater.get_kettle_mode_options() == []
+    # Upstream's helpers are capability-based; the platform gates on is_kettle.
+    coordinator = MagicMock()
+    coordinator.devices = {heater.device_id: heater}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+    await water_heater_mod.async_setup_entry(MagicMock(), entry, lambda ents: added.extend(ents))
+    assert added == []
 
 
 def test_kettle_temperature_command_payload():
@@ -200,9 +210,11 @@ def test_kettle_temperature_command_payload():
     assert payload["value"] == {"temperature": 85, "unit": "Celsius"}
 
 
-def test_state_parses_fahrenheit_target_as_celsius(kettle):
+def test_state_keeps_fahrenheit_target_and_entity_shows_celsius(kettle):
     state = _api_state(kettle, power=0, target_f=190, sensor_f=70, work_mode=1)
-    assert state.kettle_target_temperature == 88  # 190 °F
+    # Upstream keeps the setpoint in the kettle's unit; the entity converts.
+    assert state.kettle_target_temperature == 190
+    assert _entity(GoveeKettleEntity, kettle, state).target_temperature == 88  # 190 °F
     assert state.device_temperature_unit == "Fahrenheit"
     assert state.heater_temperature is None
 

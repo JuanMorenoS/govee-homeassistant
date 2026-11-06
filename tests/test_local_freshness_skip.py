@@ -192,14 +192,7 @@ def test_a_send_or_a_discarded_reply_is_not_a_reading() -> None:
     )
 
     assert GoveeCoordinator._local_last_updated(coordinator, "dev") is None
-<<<<<<< ours
-    assert (
-        GoveeCoordinator._locally_fresh_devices(coordinator, {"dev": SimpleNamespace(decodes_kettle_frames=False)})
-        == set()
-    )
-=======
     assert GoveeCoordinator._locally_fresh_devices(coordinator, _pollable({"dev": None})) == set()
->>>>>>> theirs
 
 
 class _FakeRegistryEntry:

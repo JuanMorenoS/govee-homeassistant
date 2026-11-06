@@ -222,10 +222,12 @@ class TestPoll:
         coordinator._states[DEVICE_ID] = _polled()
         assert self._fresh(coordinator) == {DEVICE_ID}
 
-    def test_other_kettles_keep_their_skip(self):
+    def test_other_kettles_are_always_read_from_the_cloud(self):
+        # Fork: an H717A/H7170 push has no water temperature, so it never
+        # earns a local-freshness skip (feat/kettle-water-heater).
         coordinator = _coordinator(_device("H717A"))
         coordinator._states[DEVICE_ID] = GoveeDeviceState.create_empty(DEVICE_ID)
-        assert self._fresh(coordinator) == {DEVICE_ID}
+        assert self._fresh(coordinator) == set()
 
     async def test_target_kept_when_the_poll_has_none(self):
         coordinator = _coordinator()
