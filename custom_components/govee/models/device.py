@@ -93,8 +93,9 @@ TEMP_ONLY_BFF_SKUS = frozenset({"H5310"})
 # ``{"online": false}`` permanently, so the BFF read path has nothing to
 # offer them either — the coordinator polls them instead. H5194 is the
 # 4-probe sibling of the H5192: same transport, registers, and checksum,
-# confirmed on real hardware (issue #197).
-PROBE_THERMOMETER_BFF_SKUS = frozenset({"H5192", "H5194"})
+# confirmed on real hardware (issue #197). H5198 is the 4-probe Wi-Fi model
+# with a display base, treated like the H5194.
+PROBE_THERMOMETER_BFF_SKUS = frozenset({"H5192", "H5194", "H5198"})
 
 # Capability type constants (from Govee API v2.0)
 CAPABILITY_ON_OFF = "devices.capabilities.on_off"

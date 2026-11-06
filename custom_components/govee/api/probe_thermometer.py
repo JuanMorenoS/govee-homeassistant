@@ -101,8 +101,8 @@ SCALE = 100.0
 # validity bound on the probe number a frame claims, which is harmless to
 # leave wide. Entity creation and polling use :func:`probes_for_sku` instead,
 # so a 2-probe H5192 is never queried for, or given entities for, probes it
-# does not have.
-PROBE_COUNT_BY_SKU = {"H5192": 2, "H5194": 4}
+# does not have. H5198 is another 4-probe model, handled like the H5194.
+PROBE_COUNT_BY_SKU = {"H5192": 2, "H5194": 4, "H5198": 4}
 DEFAULT_PROBE_COUNT = 2
 PROBES = tuple(range(1, max(PROBE_COUNT_BY_SKU.values()) + 1))
 

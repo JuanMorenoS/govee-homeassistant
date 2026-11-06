@@ -361,6 +361,12 @@ def test_probes_for_sku_h5192_vs_h5194() -> None:
     assert probes_for_sku("H5194") == (1, 2, 3, 4)
 
 
+def test_h5198_is_a_four_probe_thermometer() -> None:
+    device = GoveeDevice.synthetic_probe_thermometer("dev-1", "H5198", "Grill")
+    assert device.is_probe_thermometer
+    assert probes_for_sku("H5198") == (1, 2, 3, 4)
+
+
 def test_probes_for_sku_defaults_to_two_for_an_unknown_sku() -> None:
     """A hypothetical future probe-thermometer SKU falls back to the H5192
     shape rather than silently getting zero probes or crashing.
