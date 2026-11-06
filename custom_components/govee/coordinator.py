@@ -176,6 +176,7 @@ from .models.commands import (
     RangeCommand,
     SceneCommand,
     SegmentColorCommand,
+    KettleTemperatureCommand,
     TemperatureSettingCommand,
     ToggleCommand,
     WorkModeCommand,
@@ -555,6 +556,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # Store original poll interval for restoring after rate limit backoff
         self._original_update_interval = timedelta(seconds=poll_interval)
 
+        # Target temperature picked while an H7170-style kettle is off. On the
+        # H7170 that write starts heating, so it is held here and sent when the
+        # kettle is turned on (see water_heater.py).
+        self._kettle_pending: dict[str, dict[str, Any]] = {}
         # Requests/day this install is willing to spend on polling. The poll
         # interval is paced against the client's running daily counter to land
         # on it — see _apply_budget_pacing and request_budget.py.
@@ -1194,6 +1199,13 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         so entity availability must not gate on it (issue #97).
         """
         return device_id in self._bff_thermometer_ids
+
+    def kettle_pending(self, device_id: str) -> dict[str, Any]:
+        """Settings chosen while a kettle is off, applied when it is turned on.
+
+        Keys: ``target`` (°C) and ``mode`` (``(work_mode, mode_value)``).
+        """
+        return self._kettle_pending.setdefault(device_id, {})
 
     def account_temperature_unit(self, device_id: str) -> str | None:
         """Return the account's display unit for a device, if Govee told us.
@@ -4687,6 +4699,11 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             # unit; that poll is never skipped (see kettle/manager.py).
             if device.decodes_kettle_frames and self.kettles.must_poll(device_id):
                 continue
+            # Other kettles (H7170): their push (onOff + setTem) never carries
+            # the water temperature, so a "fresh" push must not stand in for
+            # the cloud read that does — the live temperature would stay unknown.
+            if device.is_kettle and not device.decodes_kettle_frames:
+                continue
             latest = self._local_last_updated(device_id)
             age = None if latest is None else (now - latest).total_seconds()
             if device_id not in self._local_fresh_skips:
@@ -6505,6 +6522,13 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             if self._is_heater(device_id):
                 # The heater switches itself on for a setpoint write (#265).
                 state.apply_optimistic_power(True)
+        elif isinstance(command, KettleTemperatureCommand):
+            # The command is in °C; the state keeps the kettle's own unit.
+            target = float(command.temperature)
+            unit = state.device_temperature_unit
+            if isinstance(unit, str) and unit.lower() == "fahrenheit":
+                target = target * 9 / 5 + 32
+            state.kettle_target_temperature = target
         elif isinstance(command, WorkModeCommand):
             state.apply_optimistic_work_mode(command.work_mode, command.mode_value)
             if self._is_heater(device_id):

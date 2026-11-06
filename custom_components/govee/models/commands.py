@@ -32,6 +32,7 @@ from .device import (
     INSTANCE_POWER,
     INSTANCE_SCENE,
     INSTANCE_SEGMENT_COLOR,
+    INSTANCE_SLIDER_TEMPERATURE,
     INSTANCE_SNAPSHOT,
     INSTANCE_TARGET_TEMPERATURE,
     INSTANCE_WORK_MODE,
@@ -441,3 +442,27 @@ class TemperatureSettingCommand(DeviceCommand):
         if self.auto_stop is not None:
             value["autoStop"] = self.auto_stop
         return value
+
+
+@dataclass(frozen=True)
+class KettleTemperatureCommand(DeviceCommand):
+    """Command to set a smart kettle's target temperature (H7170).
+
+    Kettles use the ``sliderTemperature`` instance of temperature_setting with
+    a ``{"temperature", "unit"}`` STRUCT (no autoStop field, unlike heaters).
+    The temperature is always sent in Celsius.
+    """
+
+    temperature: int
+    unit: str = "Celsius"
+
+    @property
+    def capability_type(self) -> str:
+        return CAPABILITY_TEMPERATURE_SETTING
+
+    @property
+    def instance(self) -> str:
+        return INSTANCE_SLIDER_TEMPERATURE
+
+    def get_value(self) -> dict[str, Any]:
+        return {"temperature": self.temperature, "unit": self.unit}

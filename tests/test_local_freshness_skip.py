@@ -90,8 +90,16 @@ def _coordinator(*, ages: dict[str, float | None], has_state: bool = True) -> An
     )
 
 
-def _pollable(ages: dict[str, float | None]) -> dict[str, Any]:
-    return {device_id: SimpleNamespace(decodes_kettle_frames=False) for device_id in ages}
+def _pollable(ages: dict[str, float | None], kettles: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {device_id: SimpleNamespace(is_kettle=device_id in kettles, decodes_kettle_frames=False) for device_id in ages}
+
+
+def test_a_kettle_is_always_read_from_the_cloud() -> None:
+    """A kettle's push has no water temperature, so it never earns a skip."""
+    ages = {"kettle": 5.0, "bulb": 5.0}
+    coordinator = _coordinator(ages=ages)
+    skipped = GoveeCoordinator._locally_fresh_devices(coordinator, _pollable(ages, kettles=("kettle",)))
+    assert skipped == {"bulb"}
 
 
 def test_poll_skips_the_device_with_a_fresh_lan_reading_only() -> None:
@@ -184,10 +192,14 @@ def test_a_send_or_a_discarded_reply_is_not_a_reading() -> None:
     )
 
     assert GoveeCoordinator._local_last_updated(coordinator, "dev") is None
+<<<<<<< ours
     assert (
         GoveeCoordinator._locally_fresh_devices(coordinator, {"dev": SimpleNamespace(decodes_kettle_frames=False)})
         == set()
     )
+=======
+    assert GoveeCoordinator._locally_fresh_devices(coordinator, _pollable({"dev": None})) == set()
+>>>>>>> theirs
 
 
 class _FakeRegistryEntry:
